@@ -1,6 +1,6 @@
 import { css as d, html as c } from "lit";
 import { property as l, state as b, query as u, customElement as f } from "lit/decorators.js";
-import { consume as _ } from "../../node_modules/@lit/context/lib/decorators/consume.js";
+import { consume as _ } from "@lit/context";
 import { BaseElement as m } from "../../primitives/base-element.js";
 import { renderTerminalText as p } from "../../primitives/terminal-parser.js";
 import { commandHandlerContext as v } from "../../primitives/terminal-context.js";

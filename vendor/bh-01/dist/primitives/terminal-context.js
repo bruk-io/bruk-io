@@ -1,4 +1,4 @@
-import { createContext as t } from "../node_modules/@lit/context/lib/create-context.js";
+import { createContext as t } from "@lit/context";
 const n = t("bh-terminal-handler");
 export {
   n as commandHandlerContext
