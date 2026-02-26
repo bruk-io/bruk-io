@@ -210,8 +210,8 @@ o.styles = [
           0deg,
           transparent,
           transparent 2px,
-          rgba(0, 0, 0, 0.08) 2px,
-          rgba(0, 0, 0, 0.08) 4px
+          var(--bh-terminal-scanline, rgba(0, 0, 0, 0.08)) 2px,
+          var(--bh-terminal-scanline, rgba(0, 0, 0, 0.08)) 4px
         );
         pointer-events: none;
         z-index: 1;
