@@ -13,7 +13,8 @@
     "useDefineForClassFields": false,
     "declaration": false,
     "sourceMap": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }

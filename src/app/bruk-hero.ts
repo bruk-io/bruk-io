@@ -8,11 +8,13 @@ import {
   type BhTerminal,
 } from '@bruk-io/bh-01';
 import '@bruk-io/bh-01';
-import { hero, feed } from '../content/index.js';
-import type { FeedEntry, FeedEntryType, StatusItem } from '../content/types.js';
+import { hero } from '../content/index.js';
+import { fs } from '../content/parser.js';
+import type { VirtualDir, VirtualFile, VirtualNode } from '../content/virtual-fs.js';
+import type { FeedEntryType } from '../content/types.js';
 import { fadeStyles } from './shared-styles.js';
 
-// --- Feed command handler (shared with the terminal) ---
+// --- Feed type styling ---
 
 const TYPE_TAGS: Record<FeedEntryType, string> = {
   thought: 'muted',
@@ -22,58 +24,75 @@ const TYPE_TAGS: Record<FeedEntryType, string> = {
   til: 'tertiary',
 };
 
-const TYPE_LABELS: Record<FeedEntryType, string> = {
-  thought: 'thought',
-  link: 'link',
-  build: 'build',
-  question: 'question',
-  til: 'TIL',
-};
-
 const COMMANDS: Record<string, string> = {
-  status: 'Show system status.',
-  feed: 'Show recent feed entries. Use --type=<type> to filter.',
+  neofetch: 'Display system info.',
+  ls: 'List directory contents. Usage: ls [path]',
+  cat: 'Show file contents. Usage: cat <path>',
+  cd: 'Change directory. Usage: cd <path>',
+  pwd: 'Print working directory.',
+  whoami: 'About this site.',
   help: 'List available commands.',
   clear: 'Clear the terminal.',
-  about: 'What is this?',
-  types: 'List entry types.',
 };
+
+function formatDate(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  const mon = d.toLocaleDateString('en-US', { month: 'short' });
+  const day = String(d.getDate()).padStart(2, ' ');
+  return `${mon} ${day}`;
+}
+
+function cwdDisplay(cwd: string): string {
+  if (cwd === '/') return '~';
+  return '~/' + cwd.slice(1);
+}
 
 class HeroCommandHandler implements CommandHandler {
   private _onExpand: () => void;
+  private _cwd = '/';
+  private _onCwdChange: (cwd: string) => void;
 
-  constructor(onExpand: () => void) {
+  constructor(onExpand: () => void, onCwdChange: (cwd: string) => void) {
     this._onExpand = onExpand;
+    this._onCwdChange = onCwdChange;
+  }
+
+  get cwd(): string {
+    return this._cwd;
   }
 
   async execute(cmd: string, args: string[], terminal: TerminalAdapter): Promise<void> {
     terminal.startCommand();
-    // Any command besides status expands the terminal
-    if (cmd !== 'status') this._onExpand();
+    if (cmd !== 'neofetch') this._onExpand();
 
     try {
       switch (cmd) {
-        case 'status':
-          this._status(terminal);
+        case 'neofetch':
+          this._neofetch(terminal);
           break;
         case 'help':
           this._help(terminal);
           break;
-        case 'feed':
-          this._feed(args, terminal);
+        case 'ls':
+          this._ls(args, terminal);
+          break;
+        case 'cat':
+          this._cat(args, terminal);
+          break;
+        case 'cd':
+          this._cd(args, terminal);
+          break;
+        case 'pwd':
+          terminal.writeLine(cwdDisplay(this._cwd));
+          break;
+        case 'whoami':
+          this._whoami(terminal);
           break;
         case 'clear':
           terminal.clear();
           break;
-        case 'about':
-          this._about(terminal);
-          break;
-        case 'types':
-          this._types(terminal);
-          break;
         default:
-          terminal.writeError(`unknown command: ${cmd}`);
-          terminal.writeLine('{muted}Type {bright}help{/}{muted} for available commands.{/}');
+          terminal.writeError(`${cmd}: command not found`);
       }
     } finally {
       terminal.endCommand();
@@ -81,12 +100,45 @@ class HeroCommandHandler implements CommandHandler {
   }
 
   complete(partial: string): string[] {
+    // Path completion for cat, cd, ls
+    const pathCmds = ['cat', 'cd', 'ls'];
+    for (const cmd of pathCmds) {
+      const prefix = cmd + ' ';
+      if (partial.startsWith(prefix) || partial === cmd) {
+        const fragment = partial.startsWith(prefix) ? partial.slice(prefix.length) : '';
+        return this._completePath(fragment).map(f => `${cmd} ${f}`);
+      }
+    }
+
     const cmds = Object.keys(COMMANDS);
     if (!partial) return cmds;
     return cmds.filter(c => c.startsWith(partial));
   }
 
-  private _status(terminal: TerminalAdapter): void {
+  private _completePath(fragment: string): string[] {
+    // Split fragment into dir part and name part
+    const lastSlash = fragment.lastIndexOf('/');
+    let dirPart: string;
+    let namePart: string;
+
+    if (lastSlash === -1) {
+      dirPart = '';
+      namePart = fragment;
+    } else {
+      dirPart = fragment.slice(0, lastSlash + 1);
+      namePart = fragment.slice(lastSlash + 1);
+    }
+
+    const lookupPath = dirPart || '.';
+    const node = fs.resolve(lookupPath, this._cwd);
+    if (!node || node.kind !== 'dir') return [];
+
+    return node.children
+      .filter(c => c.name.startsWith(namePart))
+      .map(c => dirPart + c.name + (c.kind === 'dir' ? '/' : ''));
+  }
+
+  private _neofetch(terminal: TerminalAdapter): void {
     terminal.writeLine('');
     for (const s of hero.status) {
       const val = s.segment ? `{primary}${s.value}{/}` : s.value;
@@ -97,75 +149,125 @@ class HeroCommandHandler implements CommandHandler {
 
   private _help(terminal: TerminalAdapter): void {
     terminal.writeLine('');
-    terminal.writeLine('{bright}Available commands:{/}');
-    terminal.writeLine('');
     for (const [cmd, desc] of Object.entries(COMMANDS)) {
-      terminal.writeLine(`  {primary}${cmd.padEnd(10)}{/} ${desc}`);
+      terminal.writeLine(`  {primary}${cmd.padEnd(10)}{/} {muted}${desc}{/}`);
     }
     terminal.writeLine('');
   }
 
-  private _feed(args: string[], terminal: TerminalAdapter): void {
-    const typeArg = args.find(a => a.startsWith('--type='));
-    const filterType = typeArg?.split('=')[1] as FeedEntryType | undefined;
+  private _ls(args: string[], terminal: TerminalAdapter): void {
+    const target = args[0] || '.';
+    const node = fs.resolve(target, this._cwd);
 
-    let entries: FeedEntry[];
-    if (filterType && filterType in TYPE_TAGS) {
-      entries = feed.filter(e => e.type === filterType);
-    } else if (filterType) {
-      terminal.writeError(`unknown type: ${filterType}`);
-      terminal.writeLine('{muted}Valid types: ' + Object.keys(TYPE_TAGS).join(', ') + '{/}');
+    if (!node) {
+      terminal.writeError(`ls: ${target}: No such file or directory`);
       return;
+    }
+
+    if (node.kind === 'file') {
+      terminal.writeLine(node.name);
+      return;
+    }
+
+    const dir = node as VirtualDir;
+    terminal.writeLine('');
+    terminal.writeLine(`{muted}total ${dir.children.length}{/}`);
+    for (const child of dir.children) {
+      if (child.kind === 'dir') {
+        terminal.writeLine(
+          `{muted}drwxr-xr-x  bruk        {/}  {primary}${child.name}/{/}`
+        );
+      } else {
+        const file = child as VirtualFile;
+        const type = file.meta.type as FeedEntryType | undefined;
+        const date = file.meta.date ? formatDate(file.meta.date as string) : '       ';
+        const tag = type && TYPE_TAGS[type] ? TYPE_TAGS[type] : 'bright';
+        terminal.writeLine(
+          `{muted}-rw-r--r--  bruk  ${date}{/}  {${tag}}${file.name}{/}`
+        );
+      }
+    }
+    terminal.writeLine('');
+  }
+
+  private _cat(args: string[], terminal: TerminalAdapter): void {
+    if (args.length === 0) {
+      terminal.writeError('usage: cat <path>');
+      return;
+    }
+
+    const target = args[0];
+    const node = fs.resolve(target, this._cwd);
+
+    if (!node) {
+      terminal.writeError(`cat: ${target}: No such file or directory`);
+      return;
+    }
+
+    if (node.kind === 'dir') {
+      terminal.writeError(`cat: ${target}: Is a directory`);
+      return;
+    }
+
+    const file = node as VirtualFile;
+    terminal.writeLine('');
+    terminal.writeLine(`{muted}# ${file.name}{/}`);
+
+    // Render relevant frontmatter as header comments
+    for (const [key, value] of Object.entries(file.meta)) {
+      if (key === 'title') continue; // shown as filename
+      if (Array.isArray(value)) continue; // skip complex values
+      terminal.writeLine(`{muted}# ${key}: ${value}{/}`);
+    }
+
+    terminal.writeLine('');
+    terminal.writeLine(file.body);
+
+    // Render links array if present (contact.md)
+    if (Array.isArray(file.meta.links)) {
+      terminal.writeLine('');
+      for (const link of file.meta.links as Array<Record<string, string>>) {
+        terminal.writeLine(`  {primary}${link.label}{/}  {muted}${link.href}{/}`);
+      }
+    }
+
+    terminal.writeLine('');
+  }
+
+  private _cd(args: string[], terminal: TerminalAdapter): void {
+    const target = args[0] || '~';
+    const node = fs.resolve(target, this._cwd);
+
+    if (!node) {
+      terminal.writeError(`cd: ${target}: No such file or directory`);
+      return;
+    }
+
+    if (node.kind !== 'dir') {
+      terminal.writeError(`cd: ${target}: Not a directory`);
+      return;
+    }
+
+    this._cwd = node.path;
+    this._onCwdChange(this._cwd);
+  }
+
+  private _whoami(terminal: TerminalAdapter): void {
+    const readme = fs.resolve('README.md') as VirtualFile | null;
+    terminal.writeLine('');
+    if (readme) {
+      terminal.writeLine(`{muted}# ${readme.meta.title || 'README.md'}{/}`);
+      terminal.writeLine('');
+      // Show first paragraph
+      const firstParagraph = readme.body.split('\n\n')[0];
+      if (firstParagraph) {
+        terminal.writeLine(firstParagraph.trim());
+      }
     } else {
-      entries = [...feed];
-    }
-
-    const countArg = args.find(a => a.startsWith('--count='));
-    const parsed = countArg ? parseInt(countArg.split('=')[1], 10) : NaN;
-    const count = isNaN(parsed) ? 5 : parsed;
-    entries = entries.slice(0, count);
-
-    if (entries.length === 0) {
-      terminal.writeLine('{muted}No entries found.{/}');
-      return;
-    }
-
-    terminal.writeLine('');
-    for (const entry of entries) {
-      const tag = TYPE_TAGS[entry.type];
-      const label = TYPE_LABELS[entry.type];
-      terminal.writeLine(
-        `{tertiary}${entry.date}{/}  {${tag}}[${label}]{/}  ${entry.body}`
-      );
-      if (entry.url) {
-        terminal.writeLine(`  {muted}-> ${entry.url}{/}`);
-      }
-      if (entry.project) {
-        terminal.writeLine(`  {muted}# ${entry.project}{/}`);
-      }
+      terminal.writeLine('{bright}bruk.io{/} {muted}— engineering leader, platform builder{/}');
     }
     terminal.writeLine('');
-    terminal.writeLine(`{muted}${entries.length} of ${feed.length} entries{/}`);
-    terminal.writeLine('');
-  }
-
-  private _about(terminal: TerminalAdapter): void {
-    terminal.writeLine('');
-    terminal.writeLine('{bright}bruk.io{/}');
-    terminal.writeLine('{muted}Engineering leader building platforms, teams, and technical strategy.{/}');
-    terminal.writeLine('{muted}Type {bright}feed{/}{muted} to browse or {bright}help{/}{muted} for commands.{/}');
-    terminal.writeLine('');
-  }
-
-  private _types(terminal: TerminalAdapter): void {
-    terminal.writeLine('');
-    terminal.writeLine('{bright}Entry types:{/}');
-    terminal.writeLine('');
-    for (const [type, label] of Object.entries(TYPE_LABELS)) {
-      const tag = TYPE_TAGS[type as FeedEntryType];
-      const count = feed.filter(e => e.type === type).length;
-      terminal.writeLine(`  {${tag}}[${label}]{/}  ${count} entries`);
-    }
+    terminal.writeLine('{muted}Type {bright}ls{/}{muted} to browse or {bright}help{/}{muted} for commands.{/}');
     terminal.writeLine('');
   }
 }
@@ -337,10 +439,16 @@ export class BrukHero extends LitElement {
   private static readonly DURATION = 350;
 
   @state() private _expanded = false;
+  @state() private _promptPath = '~';
   private _animating = false;
   private _mounted = false;
 
-  private _handler = new HeroCommandHandler(() => {});
+  private _handler = new HeroCommandHandler(
+    () => {},
+    (cwd: string) => {
+      this._promptPath = cwdDisplay(cwd);
+    },
+  );
 
   private _provider = new ContextProvider(this, {
     context: commandHandlerContext,
@@ -353,9 +461,39 @@ export class BrukHero extends LitElement {
     requestAnimationFrame(() => {
       this._terminal = this.renderRoot.querySelector('bh-terminal') as BhTerminal | undefined;
       if (this._terminal) {
-        this._handler.execute('status', [], this._terminal);
+        this._bootSequence(this._terminal);
       }
     });
+  }
+
+  private async _bootSequence(terminal: BhTerminal): Promise<void> {
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const today = new Date().toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+    });
+
+    terminal.startCommand();
+
+    terminal.writeLine('{bright}bruk.io{/} {muted}— v0.0.1{/}');
+    await delay(40);
+    terminal.writeLine(`{muted}${today}{/}`);
+    await delay(30);
+    terminal.writeLine('{muted}Building platforms, teams, and technical strategy.{/}');
+    await delay(40);
+    terminal.writeLine('');
+
+    // Print status inline
+    for (const s of hero.status) {
+      const val = s.segment ? `{primary}${s.value}{/}` : s.value;
+      terminal.writeLine(`  {tertiary}${s.key.padEnd(12)}{/} ${val}`);
+      await delay(30);
+    }
+
+    terminal.writeLine('');
+    await delay(30);
+    terminal.writeLine('{muted}Type {bright}help{/}{muted} for commands.{/}');
+
+    terminal.endCommand();
   }
 
   private _getWrap(): HTMLElement | null {
@@ -489,7 +627,7 @@ export class BrukHero extends LitElement {
   }
 
   render() {
-    const hasModule = hero.status.length > 0 || feed.length > 0;
+    const hasModule = hero.status.length > 0;
 
     return html`
       <div class="container">
@@ -511,20 +649,23 @@ export class BrukHero extends LitElement {
                 ${this._expanded ? BrukHero._collapseIcon : BrukHero._expandIcon}
               </button>
               <bh-terminal
-                title="System Status"
+                title="bruk.io"
                 status=""
                 status-color=""
-                prompt="\u25B8 "
+                prompt="$ "
+                prompt-user="bruk"
+                prompt-path=${this._promptPath}
+                ?scanlines=${true}
                 .hints=${this._expanded
                   ? [
-                      { key: 'status', label: 'info' },
-                      { key: 'feed', label: 'browse' },
+                      { key: 'neofetch', label: 'info' },
+                      { key: 'ls', label: 'browse' },
                       { key: 'help', label: 'commands' },
                       { key: 'Esc', label: 'close' },
                     ]
                   : [
-                      { key: 'status', label: 'info' },
-                      { key: 'feed', label: 'browse' },
+                      { key: 'neofetch', label: 'info' },
+                      { key: 'ls', label: 'browse' },
                       { key: 'help', label: 'commands' },
                     ]}
               ></bh-terminal>

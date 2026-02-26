@@ -8,6 +8,24 @@
   --noise-opacity: 0.035;
 }
 
+/* Terminal uses raw tokens (--bh-color-cod, etc.) with dark fallbacks
+   baked into its shadow DOM. Redefine the raw tokens at :root in light
+   mode so the values cascade through all shadow boundaries. */
+:root,
+[data-theme="light"] {
+  --bh-color-cod: #F0ECE4;            /* alabaster */
+  --bh-color-tundora: #CCC7BD;        /* linen */
+  --bh-color-swiss-coffee: #1A1A1A;   /* charcoal */
+  --bh-terminal-scanline: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="dark"] {
+  --bh-color-cod: #0D0C0A;
+  --bh-color-tundora: #2A2826;
+  --bh-color-swiss-coffee: #C8C4BC;
+  --bh-terminal-scanline: rgba(0, 0, 0, 0.08);
+}
+
 *,
 *::before,
 *::after {

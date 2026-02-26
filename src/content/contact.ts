@@ -1,11 +1,19 @@
-import type { ContactContent } from './types.js';
+import type { ContactContent, ContactLink } from './types.js';
+import { fs } from './parser.js';
+import type { VirtualFile } from './virtual-fs.js';
+
+const file = fs.resolve('contact.md') as VirtualFile | null;
+
+const meta = file?.meta ?? {};
+const links: ContactLink[] = Array.isArray(meta.links)
+  ? (meta.links as Array<Record<string, string>>).map(l => ({
+      label: l.label ?? '',
+      href: l.href ?? '',
+    }))
+  : [];
 
 export const contact: ContactContent = {
-  headline: "Let's connect.",
-  description: 'Open to Director and Principal Engineer roles focused on platform, infrastructure, and AI. Always happy to talk shop.',
-  links: [
-    { label: 'Email', href: 'mailto:hello@brukhabtu.com' },
-    { label: 'LinkedIn', href: 'https://linkedin.com/in/brukhabtu' },
-    { label: 'GitHub', href: 'https://github.com/brukhabtu' },
-  ],
+  headline: (meta.headline as string) ?? "Let's connect.",
+  description: file?.body ?? '',
+  links,
 };
