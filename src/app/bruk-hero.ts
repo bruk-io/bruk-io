@@ -12,7 +12,11 @@ import { hero } from '../content/index.js';
 import { fs } from '../content/parser.js';
 import type { VirtualDir, VirtualFile, VirtualNode } from '../content/virtual-fs.js';
 import type { FeedEntryType } from '../content/types.js';
+import type { GlitchConfigEvent } from './bruk-glitch.js';
 import { fadeStyles } from './shared-styles.js';
+
+const GLITCH_EFFECTS = ['tracking', 'flicker', 'aberration', 'smpte'] as const;
+type GlitchEffect = typeof GLITCH_EFFECTS[number];
 
 // --- Feed type styling ---
 
@@ -88,6 +92,9 @@ class HeroCommandHandler implements CommandHandler {
         case 'whoami':
           this._whoami(terminal);
           break;
+        case 'glitch':
+          this._glitch(args, terminal);
+          break;
         case 'clear':
           terminal.clear();
           break;
@@ -110,7 +117,27 @@ class HeroCommandHandler implements CommandHandler {
       }
     }
 
-    const cmds = Object.keys(COMMANDS);
+    // Glitch subcommand completion
+    if (partial.startsWith('glitch ') || partial === 'glitch') {
+      const fragment = partial.startsWith('glitch ') ? partial.slice(7) : '';
+      // Support "glitch <effect> <prop>" completion
+      for (const effect of GLITCH_EFFECTS) {
+        if (fragment.startsWith(effect + ' ')) {
+          const sub = fragment.slice(effect.length + 1);
+          const propKeys = [
+            ...HeroCommandHandler.EFFECT_PROPS[effect].map(p => p.key),
+            ...(effect === 'smpte' ? ['mode'] : []),
+          ];
+          const matches = sub ? propKeys.filter(k => k.startsWith(sub)) : propKeys;
+          return matches.map(k => `glitch ${effect} ${k}`);
+        }
+      }
+      const subs = [...GLITCH_EFFECTS, 'status', 'all', 'none'];
+      const matches = fragment ? subs.filter(s => s.startsWith(fragment)) : subs;
+      return matches.map(s => `glitch ${s}`);
+    }
+
+    const cmds = [...Object.keys(COMMANDS), 'glitch'];
     if (!partial) return cmds;
     return cmds.filter(c => c.startsWith(partial));
   }
@@ -250,6 +277,133 @@ class HeroCommandHandler implements CommandHandler {
 
     this._cwd = node.path;
     this._onCwdChange(this._cwd);
+  }
+
+  private _glitchState: Record<GlitchEffect, boolean> = {
+    tracking: true, flicker: true, aberration: true, smpte: true,
+  };
+
+  /** Tunable numeric props per effect */
+  private static readonly EFFECT_PROPS: Record<GlitchEffect, { key: string; configKey: keyof GlitchConfigEvent; default: number; unit: string }[]> = {
+    tracking:   [{ key: 'freq', configKey: 'trackingFreq', default: 8, unit: 's' }],
+    flicker:    [{ key: 'freq', configKey: 'flickerFreq', default: 6, unit: 's' }],
+    aberration: [
+      { key: 'freq', configKey: 'aberrationFreq', default: 10, unit: 's' },
+      { key: 'spread', configKey: 'aberrationSpread', default: 2, unit: 'px' },
+    ],
+    smpte: [
+      { key: 'freq', configKey: 'smpteFreq', default: 25, unit: 's' },
+      { key: 'duration', configKey: 'smpteDuration', default: 1200, unit: 'ms' },
+    ],
+  };
+
+  private static readonly SMPTE_MODES = ['clean', 'dropout'] as const;
+
+  private _glitchProps: Record<string, number | string> = {
+    trackingFreq: 8,
+    flickerFreq: 6,
+    aberrationFreq: 10,
+    aberrationSpread: 2,
+    smpteFreq: 25,
+    smpteDuration: 1200,
+    smpteMode: 'clean',
+  };
+
+  private _emitGlitch() {
+    const detail: GlitchConfigEvent = {
+      ...this._glitchState,
+      ...(this._glitchProps as unknown as Partial<GlitchConfigEvent>),
+    };
+    window.dispatchEvent(new CustomEvent<GlitchConfigEvent>('glitch-config', { detail }));
+  }
+
+  private _glitch(args: string[], terminal: TerminalAdapter): void {
+    if (args.length === 0 || args[0] === 'status') {
+      terminal.writeLine('');
+      terminal.writeLine('{bright}glitch status{/}');
+      for (const effect of GLITCH_EFFECTS) {
+        const on = this._glitchState[effect];
+        const tag = on ? 'success' : 'muted';
+        const label = on ? 'ON' : 'OFF';
+        const props = HeroCommandHandler.EFFECT_PROPS[effect];
+        let vals = props.map(p => `${p.key}=${this._glitchProps[p.configKey]}${p.unit}`).join(' ');
+        if (effect === 'smpte') vals += ` mode=${this._glitchProps.smpteMode}`;
+        terminal.writeLine(
+          `  {muted}${effect.padEnd(14)}{/} {${tag}}${label.padEnd(5)}{/} {muted}${vals}{/}`
+        );
+      }
+      terminal.writeLine('');
+      terminal.writeLine('{muted}Usage: glitch <effect> [<prop> <value>]{/}');
+      terminal.writeLine('');
+      return;
+    }
+
+    const sub = args[0];
+
+    if (sub === 'all') {
+      for (const e of GLITCH_EFFECTS) this._glitchState[e] = true;
+      this._emitGlitch();
+      terminal.writeLine('{success}All effects enabled.{/}');
+      return;
+    }
+
+    if (sub === 'none') {
+      for (const e of GLITCH_EFFECTS) this._glitchState[e] = false;
+      this._emitGlitch();
+      terminal.writeLine('{muted}All effects disabled.{/}');
+      return;
+    }
+
+    if (GLITCH_EFFECTS.includes(sub as GlitchEffect)) {
+      const effect = sub as GlitchEffect;
+      const props = HeroCommandHandler.EFFECT_PROPS[effect];
+
+      // glitch <effect> <prop> <value> — set a property
+      if (args[1] && args[2]) {
+        // Handle smpte mode (string prop)
+        if (effect === 'smpte' && args[1] === 'mode') {
+          const modes = HeroCommandHandler.SMPTE_MODES;
+          if (!modes.includes(args[2] as typeof modes[number])) {
+            terminal.writeError(`glitch smpte mode: must be ${modes.join(', ')}`);
+            return;
+          }
+          this._glitchProps.smpteMode = args[2];
+          this._emitGlitch();
+          terminal.writeLine(`{primary}smpte mode set to ${args[2]}{/}`);
+          return;
+        }
+
+        const prop = props.find(p => p.key === args[1]);
+        if (!prop) {
+          const allKeys = [...props.map(p => p.key), ...(effect === 'smpte' ? ['mode'] : [])];
+          terminal.writeError(`glitch ${effect}: unknown prop '${args[1]}'`);
+          terminal.writeLine(`{muted}Props: ${allKeys.join(', ')}{/}`);
+          return;
+        }
+        const val = parseFloat(args[2]);
+        if (isNaN(val) || val <= 0) {
+          terminal.writeError(`usage: glitch ${effect} ${prop.key} <number>`);
+          return;
+        }
+        this._glitchProps[prop.configKey] = val;
+        this._emitGlitch();
+        terminal.writeLine(`{primary}${effect} ${prop.key} set to ${val}${prop.unit}{/}`);
+        return;
+      }
+
+      // glitch <effect> — toggle on/off
+      this._glitchState[effect] = !this._glitchState[effect];
+      this._emitGlitch();
+      const on = this._glitchState[effect];
+      const tag = on ? 'success' : 'muted';
+      const label = on ? 'ON' : 'OFF';
+      terminal.writeLine(`{${tag}}${effect}: ${label}{/}`);
+      return;
+    }
+
+    terminal.writeError(`glitch: unknown subcommand '${sub}'`);
+    terminal.writeLine('{muted}Effects: ' + GLITCH_EFFECTS.join(', ') + '{/}');
+    terminal.writeLine('{muted}Also: all, none, status, <effect> <prop> <value>{/}');
   }
 
   private _whoami(terminal: TerminalAdapter): void {
