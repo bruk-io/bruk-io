@@ -10,6 +10,7 @@ import './bruk-writing.js';
 import './bruk-about.js';
 import './bruk-contact.js';
 import './bruk-footer.js';
+import './bruk-glitch.js';
 
 @customElement('bruk-site')
 export class BrukSite extends LitElement {
@@ -54,6 +55,9 @@ export class BrukSite extends LitElement {
       ${posts.length ? html`<bruk-writing></bruk-writing>` : nothing}
       ${contact.links.length ? html`<bruk-contact></bruk-contact>` : nothing}
       <bruk-footer></bruk-footer>
+      ${new URLSearchParams(window.location.search).has('under-construction')
+        ? html`<bruk-glitch smpte></bruk-glitch>`
+        : nothing}
     `;
   }
 }
