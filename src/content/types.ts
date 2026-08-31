@@ -23,14 +23,14 @@ export interface StatusItem {
   segment?: boolean;
 }
 
-export interface Project {
-  tag: string;
-  year: string;
+export interface Article {
+  slug: string;
   title: string;
-  description: string;
-  stack: string[];
-  href: string;
-  featured?: boolean;
+  date: string;
+  tag: string;
+  tagLabel: string;
+  summary?: string;
+  body: string;
 }
 
 export interface Post {
