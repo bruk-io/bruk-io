@@ -22,6 +22,12 @@ export function parseFrontmatter(raw: string): { meta: Record<string, unknown>; 
   return { meta, body };
 }
 
+/** Strip a matching pair of surrounding quotes, as YAML scalars allow. */
+function unquote(value: string): string {
+  const quoted = value.match(/^"(.*)"$|^'(.*)'$/);
+  return quoted ? (quoted[1] ?? quoted[2]) : value;
+}
+
 function parseSimpleYaml(yaml: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const lines = yaml.split('\n');
@@ -33,7 +39,7 @@ function parseSimpleYaml(yaml: string): Record<string, unknown> {
     if (!match) { i++; continue; }
 
     const key = match[1];
-    const inlineValue = match[2].trim();
+    const inlineValue = unquote(match[2].trim());
 
     // Check if next line starts an array
     if (inlineValue === '' && i + 1 < lines.length && lines[i + 1].match(/^\s+-\s/)) {
@@ -43,19 +49,19 @@ function parseSimpleYaml(yaml: string): Record<string, unknown> {
         const itemMatch = lines[i].match(/^\s+-\s+(.*)/);
         if (!itemMatch) { i++; continue; }
 
-        const itemLine = itemMatch[1].trim();
+        const itemLine = unquote(itemMatch[1].trim());
         // Check if this is a key: value (nested object)
         const kvMatch = itemLine.match(/^(\w[\w-]*)\s*:\s*(.*)/);
         if (kvMatch) {
           // Start of a nested object in the array
           const obj: Record<string, string> = {};
-          obj[kvMatch[1]] = kvMatch[2].trim();
+          obj[kvMatch[1]] = unquote(kvMatch[2].trim());
           i++;
           // Collect continuation lines (indented key: value, not starting with -)
           while (i < lines.length) {
             const contMatch = lines[i].match(/^\s{2,}(\w[\w-]*)\s*:\s*(.*)/);
             if (contMatch && !lines[i].match(/^\s+-\s/)) {
-              obj[contMatch[1]] = contMatch[2].trim();
+              obj[contMatch[1]] = unquote(contMatch[2].trim());
               i++;
             } else {
               break;
@@ -89,7 +95,7 @@ function buildTree(): VirtualDir {
   const root: VirtualDir = { kind: 'dir', name: '~', path: '/', children: [] };
 
   // Ensure known directories exist
-  const knownDirs = ['feed', 'projects'];
+  const knownDirs = ['feed', 'writing'];
   for (const dirName of knownDirs) {
     root.children.push({ kind: 'dir', name: dirName, path: `/${dirName}`, children: [] });
   }
